@@ -91,7 +91,7 @@ __global__ void reduceMinMax(float * in, float * out, const int op)
 {
     extern __shared__ float sdata[]; // initializing shared memory for each block of threads
     int index = blockDim.x*blockIdx.x + threadIdx.x; // getting absolute location
-    int threadIndex = threadIdx.x; // thread index between 0 and 1024
+    int threadIndex = threadIdx.x; // thread index between 0 and 1023
     sdata[threadIndex] = in[index]; // move global memory into local shared memory
     __syncthreads(); // wait until all thread indices are written into shared memory
     for(int s=blockDim.x/2; s>0; s >>= 1) // reduce by half everytime loop
@@ -122,6 +122,25 @@ __global__ void atomicComputeHist(float * vals, int * hist, float lumMin, float 
     atomicAdd(&hist[bin],1);
 }
 
+__global__ void inclusiveScan(unsigned int * dcdf, int * hist, int numBins)
+{
+    int index = threadIdx.x+blockDim.x*blockIdx.x;
+    if(index==0)
+        dcdf[index]=hist[index];
+    else {
+        for(int i=1;i<=numBins;i <<= 1)
+        {
+            int otherVal = index-i;
+            unsigned int val = 0;
+            if(otherVal >= 0)
+                val=hist[otherVal];
+            __syncthreads();
+            if(otherVal >= 0)
+                dcdf[index]+=val;
+            __syncthreads();
+        }
+    }
+}
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
@@ -160,22 +179,24 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     checkCudaErrors(cudaMalloc((void **)&tempMax, sizeof(float)*block));
     cudaMalloc((void **)&min, sizeof(float));
     cudaMalloc((void **)&max, sizeof(float));
-    reduceMinMax<<<threads, blocks, sizeof(float)*thread>>>(device_LL, tempMin, MIN); // have min values of each block stored in tempMin
+    reduceMinMax<<<blocks, threads, sizeof(float)*thread>>>(device_LL, tempMin, MIN); // have min values of each block stored in tempMin
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-    reduceMinMax<<<threads, blocks, sizeof(float)*thread>>>(device_LL, tempMax, MAX); // have max values of each block stored in tempMax
+    reduceMinMax<<<blocks, threads, sizeof(float)*thread>>>(device_LL, tempMax, MAX); // have max values of each block stored in tempMax
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
     
     // now compute absolute min and max of the temp values
     thread=block;
     dim3 newthreads(thread,1,1); // have a thread for each block
     dim3 newblocks(1,1,1); // only 1 block left
-    reduceMinMax<<<newthreads, newblocks, sizeof(float)*thread>>>(tempMin, min, MIN);
+    reduceMinMax<<<newblocks, newthreads, sizeof(float)*thread>>>(tempMin, min, MIN);
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-    reduceMinMax<<<newthreads, newblocks, sizeof(float)*thread>>>(tempMax, max, MAX);
+    reduceMinMax<<<newblocks, newthreads, sizeof(float)*thread>>>(tempMax, max, MAX);
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaMemcpy(&min_logLum, min, sizeof(float), cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy(&max_logLum, max, sizeof(float), cudaMemcpyDeviceToHost));
-    
+    std::cout << "Min: " << min_logLum << std::endl;
+    std::cout << "Max: " << max_logLum << std::endl;
+
     // 2) Finding range
     float range = max_logLum - min_logLum;
     
@@ -187,15 +208,19 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     block=numPixels/thread;
     dim3 histblocks(block,1,1);
     checkCudaErrors(cudaMemset(histCount,0,sizeof(int)*numBins));
-    atomicComputeHist<<<histthreads, histblocks>>>(device_LL,histCount,min_logLum,range,numBins);
+    atomicComputeHist<<<histblocks, histthreads>>>(device_LL,histCount,min_logLum,range,numBins);
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
     
-    // 4) Performing exclusive scan to get cdf of histogram values
-   /* d_cdf[0]=0;
-    for(int i=1;i<numBins;i++)
-    {
-       d_cdf[i] = d_cdf[i-1]+histCount[i-1];
-    }*/
+    // 4) Performing inclusive scan to get cdf of histogram values
+    unsigned int * D_cdf;
+    checkCudaErrors(cudaMalloc((void**)&D_cdf, sizeof(unsigned int)*numBins));
+    checkCudaErrors(cudaMemset(D_cdf, 0, sizeof(unsigned int)*numBins)); // set D_cdf[0] to identity (0)
+    thread=numBins;
+    dim3 cdfThreads(thread,1,1);
+    block=1;
+    dim3 cdfBlocks(block,1,1);
+    inclusiveScan<<<cdfBlocks, cdfThreads>>>(D_cdf, histCount, numBins);
+    checkCudaErrors(cudaMemcpy(d_cdf,D_cdf,sizeof(unsigned int)*numBins,cudaMemcpyDeviceToDevice));
 
     // clean up allocated memory on GPU
     checkCudaErrors(cudaFree(device_LL));
@@ -204,4 +229,5 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     checkCudaErrors(cudaFree(histCount));
     checkCudaErrors(cudaFree(min));
     checkCudaErrors(cudaFree(max));
+    checkCudaErrors(cudaFree(D_cdf));
 }
