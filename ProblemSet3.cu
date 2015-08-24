@@ -115,6 +115,14 @@ __global__ void reduceMinMax(float * in, float * out, const int op)
     }
 }
 
+__global__ void atomicComputeHist(float * vals, int * hist, float lumMin, float lumRange, int numBins)
+{
+    int pixel = blockDim.x*blockIdx.x+threadIdx.x;
+    int bin = static_cast<int>((vals[pixel]-lumMin)/lumRange*numBins);
+    atomicAdd(&hist[bin],1);
+}
+
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -139,43 +147,46 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     checkCudaErrors(cudaMalloc((void **) &device_LL, sizeof(float)*numPixels)); // allocate memory of logLuminance on GPU
     checkCudaErrors(cudaMemcpy(device_LL, d_logLuminance, sizeof(float)*numPixels,cudaMemcpyHostToDevice)); // move logLuminance values from CPU to GPU memory
     // 1) Finding min and max values
-    int threads = 1024; // have 1024 threads in each block
-    int blocks = numPixels/threads; // calculate number of blocks
+    int thread = 1024;
+    dim3 threads(thread,1,1); // have 1024 threads in each block
+    int block = numPixels/thread;
+    dim3 blocks(block,1,1); // calculate number of blocks
     float * tempMin;
     float * tempMax;
-    checkCudaErrors(cudaMalloc((void **)&tempMin, sizeof(float)*blocks));
-    checkCudaErrors(cudaMalloc((void **)&tempMax, sizeof(float)*blocks));
-    reduceMinMax<<<threads, blocks, sizeof(float)*threads>>>(device_LL, tempMin, MIN); // have min values of each block stored in tempMin
-    reduceMinMax<<<threads, blocks, sizeof(float)*threads>>>(device_LL, tempMax, MAX); // have max values of each block stored in tempMax
+    checkCudaErrors(cudaMalloc((void **)&tempMin, sizeof(float)*block));
+    checkCudaErrors(cudaMalloc((void **)&tempMax, sizeof(float)*block));
+    reduceMinMax<<<threads, blocks, sizeof(float)*thread>>>(device_LL, tempMin, MIN); // have min values of each block stored in tempMin
+    reduceMinMax<<<threads, blocks, sizeof(float)*thread>>>(device_LL, tempMax, MAX); // have max values of each block stored in tempMax
     // now compute absolute min and max of the temp values
-    threads=blocks; // have a thread for each block
-    blocks=1; // only 1 block left
-    reduceMinMax<<<threads, blocks, sizeof(float)*threads>>>(tempMin, &min_logLum, MIN);
-    reduceMinMax<<<threads, blocks, sizeof(float)*threads>>>(tempMax, &max_logLum, MAX);
-    // clean up allocated memory on GPU
-    checkCudaErrors(cudaFree(device_LL));
-    checkCudaErrors(cudaFree(tempMin));
-    checkCudaErrors(cudaFree(tempMax));
+    thread=block;
+    dim3 newthreads(thread,1,1); // have a thread for each block
+    dim3 newblocks(1,1,1); // only 1 block left
+    reduceMinMax<<<newthreads, newblocks, sizeof(float)*thread>>>(tempMin, &min_logLum, MIN);
+    reduceMinMax<<<newthreads, newblocks, sizeof(float)*thread>>>(tempMax, &max_logLum, MAX);
     
     // 2) Finding range
     float range = max_logLum - min_logLum;
     
-   /* // 3) Generating histogram
-    unsigned int *histVals = new unsigned int[numBins];
-    for(int i=0;i<numBins;i++)
-        histVals[i]=0;
-    for(int i=0;i<numPixels;i++)
-    {
-        unsigned int bin = min(static_cast<unsigned int>((d_logLuminance[i] - min_logLum) / range * numBins), static_cast<unsigned int>(numBins-1));
-        histVals[bin]++;
-    }
+    // 3) Generating histogram
+    int * histCount;
+    checkCudaErrors(cudaMalloc((void **)&histCount, sizeof(int)*numBins));
+    thread=1024;
+    dim3 histthreads(thread,1,1);
+    block=numPixels/thread;
+    dim3 histblocks(block,1,1);
+    checkCudaErrors(cudaMemset(histCount,0,sizeof(int)*numBins));
+    atomicComputeHist<<<histthreads, histblocks>>>(device_LL,histCount,min_logLum,range,numBins);
     
     // 4) Performing exclusive scan to get cdf of histogram values
-    d_cdf[0]=0;
+   /* d_cdf[0]=0;
     for(int i=1;i<numBins;i++)
     {
-       d_cdf[i] = d_cdf[i-1]+histVals[i-1];
-    }
-    
-    delete[] histVals;*/
+       d_cdf[i] = d_cdf[i-1]+histCount[i-1];
+    }*/
+
+    // clean up allocated memory on GPU
+    checkCudaErrors(cudaFree(device_LL));
+    checkCudaErrors(cudaFree(tempMin));
+    checkCudaErrors(cudaFree(tempMax));
+    checkCudaErrors(cudaFree(histCount));
 }
