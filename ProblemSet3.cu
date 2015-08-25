@@ -108,9 +108,9 @@ __global__ void reduceMinMax(float * in, float * out, const int op)
                 sdata[threadIndex] = max(sdata[threadIndex],sdata[threadIndex+s]);
             }
         }
-        // if s is odd, and you naively divide by 2, you will skip an operation with one of the indices due to flooring of s; 3/2 = 1
-        if(s == 3) // the reason I do not use (s%2 == 1), is due to the fact that I encounter errors using the % operator with whatever compiler Udacity is using. However I do know that the odd number that is encountered is 3 because numPixels=98304, which makes blocks = 96
-            s++; // thus, just increment s by 1 to make it even again, to assure that you operate on all values
+        // if s is odd, and you naively divide by 2, you will skip an operation with one of the indices due to flooring of s; ie. 3/2 = 1
+        if(s != 1 && (s % 2) == 1)
+            s++; // thus, just increment s by 1 to make it even again, to assure that you compare on all values
         __syncthreads(); // wait until all threads have completed; the min or max value of this block will be in sdata[0]
     }
     if(threadIndex == 0) // store the result of each block into out location
