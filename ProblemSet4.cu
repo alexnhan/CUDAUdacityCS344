@@ -57,14 +57,34 @@ __global__ void pred(unsigned int * inputVals, unsigned int * predicate, unsigne
     if(index >= numElems)
         return;
     int p = ((inputVals[index] & bitLocation) == compactVal) ? 1 : 0;
+    __syncthreads();
     predicate[index] = p;
 }
 
-__global__ void exclusiveScan(unsigned int * predicate, int numElems) // Blelloch scan
+__global__ void exclusiveScan(unsigned int * sPredicate, int numElems)
 {
+    // Sum at current index is the sum of all elements preceding it
     int index = threadIdx.x + blockDim.x*blockIdx.x;
     if(index >= numElems)
         return;
+    int val;
+    if(index != 0)
+    {
+        val = sPredicate[index-1];
+        for(int i=index-2;i>=0;i--)
+        {
+            val += sPredicate[i];
+            __syncthreads();
+        }
+    }
+    __syncthreads();
+    if(index == 0)
+        sPredicate[index] = 0;
+    else
+        sPredicate[index] = val;
+    
+    // Tried to implement Blelloch Scan, but it only worked for certain arrays.
+    /*
     for(int i=1;i<numElems;i <<= 1) // reduce
     {
         int otherVal = index - i;
@@ -96,7 +116,7 @@ __global__ void exclusiveScan(unsigned int * predicate, int numElems) // Blelloc
             predicate[otherVal] = L;
         }
         __syncthreads();
-    }
+    }*/
 }
 
 __global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned int * outputVals, unsigned int * outputPos, unsigned int * predicate, unsigned int * scannedPredicate, unsigned int * histVals, int movingOnes, int numElems)
@@ -104,78 +124,107 @@ __global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned
     int index = threadIdx.x + blockDim.x*blockIdx.x;
     if(index >= numElems)
         return;
-    if(predicate[index]==1)
-    {
-        int outIdx = ((movingOnes==1) ? (scannedPredicate[index] + histVals[0]) : scannedPredicate[index]);
-        int inVal = inputVals[index];
-        int inPos = inputPos[index];
-        outputVals[outIdx] = inVal;
-        outputPos[outIdx] = inPos;
+    if(histVals[0] != numElems) {
+        if(predicate[index]==1)
+        {
+            int outIdx;
+            //int outIdx = ((movingOnes==1) ? (scannedPredicate[index] + histVals[0]) : scannedPredicate[index]);
+            if(movingOnes == 0)
+                outIdx = scannedPredicate[index];
+            else
+                outIdx = scannedPredicate[index] + histVals[0];
+            int inVal = inputVals[index];
+            int inPos = inputPos[index];
+            outputVals[outIdx] = inVal;
+            outputPos[outIdx] = inPos;
+        }
     }
     __syncthreads();
 }
+
+void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVals, unsigned int * outPos)//, int numElems)
+{
+    int numElems = 50;
+    /*unsigned int h_a[numElems];
+    unsigned int h_b[numElems];
+    int a = numElems*200;
+    for(int i=0;i<numElems;i++)
+    {
+        h_a[i] = a;
+        h_b[i] = a;
+        a--;
+    }*/
+    int aSize = sizeof(unsigned int)*numElems;  
+    unsigned int * d_inputVals;
+    unsigned int * d_inputPos;
+    unsigned int * d_outputVals;
+    unsigned int * d_outputPos;
+    cudaMalloc(&d_inputVals, aSize);
+    cudaMalloc(&d_inputPos, aSize);
+    cudaMalloc(&d_outputVals, aSize);
+    cudaMalloc(&d_outputPos, aSize);
+    checkCudaErrors(cudaMemcpy(d_inputVals, inVals, aSize, cudaMemcpyDeviceToDevice));
+    checkCudaErrors(cudaMemcpy(d_inputPos, inPos, aSize, cudaMemcpyDeviceToDevice));
+    unsigned int * histVals;
+    unsigned int * predicate;
+    unsigned int * scannedPredicate;
+    cudaMalloc(&histVals, sizeof(unsigned int)*2);
+    cudaMalloc(&predicate, aSize);
+    cudaMalloc(&scannedPredicate, aSize);
+    int threads = 1024;
+    int blocks = numElems/threads + 1;
+    for(int i=0;i<32;i++)
+    {
+        unsigned int bitLoc = 1 << i;
+        // 1) Histogram of number of occurences of each bit
+        checkCudaErrors(cudaMemset(histVals, 0, 2*sizeof(unsigned int)));
+        hist<<<blocks,threads>>>(d_inputVals, histVals, bitLoc, numElems);
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        // Using compaction to compute a predicate array for 0's
+        pred<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, 0, numElems);
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaMemcpy(scannedPredicate, predicate, aSize, cudaMemcpyDeviceToDevice));
+        // Exclusive scan on predicate array to get index values of 0's
+        exclusiveScan<<<blocks,threads>>>(scannedPredicate, numElems);
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        // Move input data into output data based on index specified in predicate array
+        move<<<blocks,threads>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, predicate, scannedPredicate, histVals, 0, numElems);
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        // Use compaction to compute predicate array for 1's
+        pred<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, bitLoc, numElems);
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaMemcpy(scannedPredicate, predicate,aSize, cudaMemcpyDeviceToDevice));
+        // Exclusive scan on predicate array to get index values of 1's
+        exclusiveScan<<<blocks,threads>>>(scannedPredicate, numElems);
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        // Move input data into output data based on index specified in predicate array plus offset from 0's
+        move<<<blocks,threads>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, predicate, scannedPredicate, histVals, 1, numElems);
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        // Copy output values into input values to update the sorted list
+        checkCudaErrors(cudaMemcpy(d_inputVals, d_outputVals, aSize, cudaMemcpyDeviceToDevice));
+        checkCudaErrors(cudaMemcpy(d_inputPos, d_outputPos, aSize, cudaMemcpyDeviceToDevice));
+    }
+    unsigned int pv[numElems];
+    cudaMemcpy(pv, d_outputVals, aSize, cudaMemcpyDeviceToHost);
+    for(int i=0;i<numElems;i++)
+        cout << pv[i] << endl;
     
+    checkCudaErrors(cudaMemcpy(outVals, d_outputVals, aSize, cudaMemcpyDeviceToDevice));
+    checkCudaErrors(cudaMemcpy(outPos, d_outputPos, aSize, cudaMemcpyDeviceToDevice));
+    cudaFree(d_inputVals);
+    cudaFree(d_inputPos);
+    cudaFree(d_outputVals);
+    cudaFree(d_outputPos);
+    cudaFree(histVals);
+    cudaFree(scannedPredicate);
+    cudaFree(predicate);
+}
+
 void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_inputPos,
                unsigned int* const d_outputVals,
                unsigned int* const d_outputPos,
                const size_t numElems)
 {
-    unsigned int numBits = 32;
-    unsigned int * histVals;
-    unsigned int * predicate;
-    unsigned int * scannedPredicate;
-    unsigned int pv[numElems];
-    unsigned int pv1[numElems];
-    int threads = 1024;
-    int blocks = numElems/threads + 1;
-    checkCudaErrors(cudaMalloc((void**)&predicate, numElems*sizeof(int)));
-    checkCudaErrors(cudaMalloc((void**)&scannedPredicate, numElems*sizeof(int)));
-    checkCudaErrors(cudaMalloc((void**)&histVals, 2*sizeof(unsigned int)));
-    for(int i=0;i<numBits;i++)
-    {
-        unsigned int bitLoc = 1 << i;
-        // 1) Histogram of number of occurences of each bit
-        checkCudaErrors(cudaMemset(histVals, 0, 2*sizeof(unsigned int)));
-        checkCudaErrors(cudaMemset(d_outputVals, 0, numElems*sizeof(unsigned int)));
-        checkCudaErrors(cudaMemset(d_outputPos, 0, numElems*sizeof(unsigned int)));
-        checkCudaErrors(cudaMemset(predicate, 0, numElems*sizeof(unsigned int)));
-        checkCudaErrors(cudaMemset(scannedPredicate, 0, numElems*sizeof(unsigned int)));
-        hist<<<blocks,threads>>>(d_inputVals, histVals, bitLoc, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        // Using compaction to compute a predicate array for 0's
-        pred<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, 0, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaMemcpy(scannedPredicate, predicate, sizeof(unsigned int)*numElems, cudaMemcpyDeviceToDevice));
-        // Exclusive scan on predicate array to get index values of 0's
-        exclusiveScan<<<blocks,threads>>>(scannedPredicate, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        cudaMemcpy(pv, scannedPredicate, numElems*sizeof(unsigned int), cudaMemcpyDeviceToHost);
-        cout << pv[0] << endl;
-        // Move input data into output data based on index specified in predicate array
-        //move<<<blocks,threads>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, predicate, scannedPredicate, histVals, 0, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaMemset(predicate, 0, numElems*sizeof(unsigned int)));
-        checkCudaErrors(cudaMemset(scannedPredicate, 0, numElems*sizeof(unsigned int)));
-        // Use compaction to compute predicate array for 1's
-        pred<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, bitLoc, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaMemcpy(scannedPredicate, predicate, sizeof(unsigned int)*numElems, cudaMemcpyDeviceToDevice));
-        
-        // Exclusive scan on predicate array to get index values of 1's
-      /*  exclusiveScan<<<blocks,threads>>>(scannedPredicate, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        // Move input data into output data based on index specified in predicate array plus offset from 0's
-        move<<<blocks,threads>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, predicate, scannedPredicate, histVals, 1, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        // Copy output values into input values to update the sorted list
-        checkCudaErrors(cudaMemcpy(d_inputVals, d_outputVals, sizeof(unsigned int)*numElems, cudaMemcpyDeviceToDevice));
-        checkCudaErrors(cudaMemcpy(d_inputPos, d_outputPos, sizeof(unsigned int)*numElems, cudaMemcpyDeviceToDevice));
-    */}
-    
-    checkCudaErrors(cudaFree(histVals));
-    checkCudaErrors(cudaFree(predicate));
-    checkCudaErrors(cudaFree(scannedPredicate));
-
-    
+    testMove(d_inputVals, d_inputPos, d_outputVals, d_outputPos);//, numElems);
 }
