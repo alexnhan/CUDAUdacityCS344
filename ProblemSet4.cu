@@ -144,16 +144,16 @@ __global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned
 
 void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVals, unsigned int * outPos)//, int numElems)
 {
-    int numElems = 40;
-    unsigned int h_a[numElems];
+    int numElems = 200;
+    /*unsigned int h_a[numElems];
     unsigned int h_b[numElems];
-    int a = numElems;
+    int a = numElems*200;
     for(int i=0;i<numElems;i++)
     {
         h_a[i] = a;
         h_b[i] = a;
         a--;
-    }
+    }*/
     int aSize = sizeof(unsigned int)*numElems;  
     unsigned int * d_inputVals;
     unsigned int * d_inputPos;
@@ -163,8 +163,8 @@ void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVal
     cudaMalloc(&d_inputPos, aSize);
     cudaMalloc(&d_outputVals, aSize);
     cudaMalloc(&d_outputPos, aSize);
-    checkCudaErrors(cudaMemcpy(d_inputVals, h_a, aSize, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_inputPos, h_b, aSize, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_inputVals, inVals, aSize, cudaMemcpyDeviceToDevice));
+    checkCudaErrors(cudaMemcpy(d_inputPos, inPos, aSize, cudaMemcpyDeviceToDevice));
     unsigned int * histVals;
     unsigned int * predicate;
     unsigned int * scannedPredicate;
