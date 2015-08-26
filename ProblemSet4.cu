@@ -55,6 +55,16 @@ __global__ void compact(unsigned int * inputVals, unsigned int * predicate, unsi
     predicate[index] = p;
 }
 
+__global__ void exclusiveScan(unsigned int * predicate, int numElems) // Blelloch scan
+{
+    int index = threadIdx.x + blockDim.x*blockIdx.x;
+    for(int i=1;i<numElems;i <<= 1) // reduce
+    {
+        int otherVal = index - i;
+        if(otherVal >= 0 && index )
+    }
+}
+
 void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_inputPos,
                unsigned int* const d_outputVals,
@@ -77,10 +87,9 @@ void your_sort(unsigned int* const d_inputVals,
         // Using compaction to compute a predicate array for 0's
         compact<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, 0);
         // Exclusive scan on predicate array to get index values of 0's
-        
+        exclusiveScan<<<blocks,threads>>>(predicate, numElems);
     }
     
     checkCudaErrors(cudaFree(histVals));
     checkCudaErrors(cudaFree(predicate));
-                    
 }
