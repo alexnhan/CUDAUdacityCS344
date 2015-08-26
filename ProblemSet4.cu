@@ -3,7 +3,7 @@
 
 #include "reference_calc.cpp"
 #include "utils.h"
-
+#include <stdio.h>
 /* Red Eye Removal
    ===============
    
@@ -61,7 +61,34 @@ __global__ void exclusiveScan(unsigned int * predicate, int numElems) // Blelloc
     for(int i=1;i<numElems;i <<= 1) // reduce
     {
         int otherVal = index - i;
-        if(otherVal >= 0 && index )
+        int val;
+        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
+            val = predicate[otherVal];
+        __syncthreads();
+        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
+            predicate[index]+=val;
+        __syncthreads();
+    }
+    if(index == (numElems-1))
+        predicate[index] = 0; // reset last element to identity
+    __syncthreads();
+    for(int i=numElems/2; i>0; i >>= 1) // downstream
+    {
+        int otherVal = index - i;
+        int L;
+        int LplusR;
+        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
+        {
+            L = predicate[index];
+            LplusR = predicate[index]+predicate[otherVal];
+        }
+        __syncthreads();
+        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
+        {
+            predicate[index] = LplusR;
+            predicate[otherVal] = L;
+        }
+        __syncthreads();
     }
 }
 
@@ -88,8 +115,11 @@ void your_sort(unsigned int* const d_inputVals,
         compact<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, 0);
         // Exclusive scan on predicate array to get index values of 0's
         exclusiveScan<<<blocks,threads>>>(predicate, numElems);
+        // Move input data into output data based on index specified in predicate array
     }
     
     checkCudaErrors(cudaFree(histVals));
     checkCudaErrors(cudaFree(predicate));
+
+    
 }
