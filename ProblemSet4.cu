@@ -124,7 +124,9 @@ __global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned
     int index = threadIdx.x + blockDim.x*blockIdx.x;
     if(index >= numElems)
         return;
-    if(histVals[0] != numElems) {
+    int HV = histVals[0];
+    __syncthreads();
+    if(HV != numElems) {
         if(predicate[index]==1)
         {
             int outIdx;
@@ -132,7 +134,7 @@ __global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned
             if(movingOnes == 0)
                 outIdx = scannedPredicate[index];
             else
-                outIdx = scannedPredicate[index] + histVals[0];
+                outIdx = scannedPredicate[index] + HV;
             int inVal = inputVals[index];
             int inPos = inputPos[index];
             outputVals[outIdx] = inVal;
@@ -142,9 +144,9 @@ __global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned
     __syncthreads();
 }
 
-void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVals, unsigned int * outPos)//, int numElems)
+void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVals, unsigned int * outPos, int numElems)
 {
-    int numElems = 200;
+    //int numElems = 200;
     /*unsigned int h_a[numElems];
     unsigned int h_b[numElems];
     int a = numElems*200;
@@ -226,5 +228,5 @@ void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_outputPos,
                const size_t numElems)
 {
-    testMove(d_inputVals, d_inputPos, d_outputVals, d_outputPos);//, numElems);
+    testMove(d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems);
 }
