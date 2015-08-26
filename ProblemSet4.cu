@@ -67,8 +67,8 @@ void your_sort(unsigned int* const d_inputVals,
     
     int threads = 1024;
     int blocks = numElems/threads;
-    checkCudaErrors(cudaMalloc((void**)&predicate), numElems*sizeof(int));
-    checkCudaErrors(cudaMalloc((void**)&histVals, 2*sizeof(unsigned int));
+    checkCudaErrors(cudaMalloc((void**)&predicate, numElems*sizeof(int)));
+    checkCudaErrors(cudaMalloc((void**)&histVals, 2*sizeof(unsigned int)));
     for(int i=0;i<numBits;i++)
     {
         unsigned int bitLoc = 1 << i;
