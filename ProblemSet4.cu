@@ -79,7 +79,7 @@ __global__ void exclusiveScan(unsigned int * hist, unsigned int * oldVals, int n
     }
     int lastVal=0;
     if(j>0)
-        lastVal = hist[j*numBins-1]+1;
+        lastVal = hist[j*numBins-1]+oldVals[j*numBins-1];
     __syncthreads();
     int a = hist[index]+lastVal;
     __syncthreads();
