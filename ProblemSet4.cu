@@ -126,9 +126,9 @@ __global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned
     for(int i=0;i<4000;i++)
         cout << a[i] << endl;
 }*/
-void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVals, unsigned int * outPos)//, int numElems)
+void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVals, unsigned int * outPos, int numElems)
 {
-    int numElems = 3000;
+    //int numElems = 30000;
     /*unsigned int h_a[numElems];
     unsigned int h_b[numElems];
     int a = numElems*200;
@@ -191,10 +191,10 @@ void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVal
         checkCudaErrors(cudaMemcpy(d_inputVals, d_outputVals, aSize, cudaMemcpyDeviceToDevice));
         checkCudaErrors(cudaMemcpy(d_inputPos, d_outputPos, aSize, cudaMemcpyDeviceToDevice));
     }
-    unsigned int pv[numElems];
+   /* unsigned int pv[numElems];
     cudaMemcpy(pv, d_outputVals, aSize, cudaMemcpyDeviceToHost);
     for(int i=0;i<numElems;i++)
-        cout << pv[i] << endl;
+        cout << pv[i] << endl;*/
     
     checkCudaErrors(cudaMemcpy(outVals, d_outputVals, aSize, cudaMemcpyDeviceToDevice));
     checkCudaErrors(cudaMemcpy(outPos, d_outputPos, aSize, cudaMemcpyDeviceToDevice));
@@ -216,5 +216,5 @@ void your_sort(unsigned int* const d_inputVals,
                const size_t numElems)
 {
     //testScan();
-    testMove(d_inputVals, d_inputPos, d_outputVals, d_outputPos);//, numElems);
+    testMove(d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems);
 }
