@@ -61,92 +61,74 @@ __global__ void pred(unsigned int * inputVals, unsigned int * predicate, unsigne
     predicate[index] = p;
 }
 
-__global__ void exclusiveScan(unsigned int * sPredicate, int numElems)
+__global__ void exclusiveScan(unsigned int * hist, unsigned int * oldVals, int numBins, int j, int numElems) // Hillis Steele Scan
 {
-    // Sum at current index is the sum of all elements preceding it
-    int index = threadIdx.x + blockDim.x*blockIdx.x;
+    int index = threadIdx.x + j*numBins;
     if(index >= numElems)
         return;
-    int val;
-    if(index != 0)
+    for(int i=1;i<=numBins;i <<= 1)
     {
-        val = sPredicate[index-1];
-        for(int i=index-2;i>=0;i--)
-        {
-            val += sPredicate[i];
-        }
+        int otherVal = index-i;
+        unsigned int val = 0;
+        if(otherVal-j*numBins >= 0)
+           val=hist[otherVal];
+        __syncthreads();
+        if(otherVal-j*numBins >= 0)
+            hist[index]+=val;
         __syncthreads();
     }
+    int lastVal=0;
+    if(j>0)
+        lastVal = hist[j*numBins-1]+1;
     __syncthreads();
-    if(index == 0)
-        sPredicate[index] = 0;
-    else
-        sPredicate[index] = val;
-    
-    // Tried to implement Blelloch Scan, but it only worked for certain arrays.
-    /*
-    for(int i=1;i<numElems;i <<= 1) // reduce
-    {
-        int otherVal = index - i;
-        int val;
-        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
-            val = predicate[otherVal];
-        __syncthreads();
-        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
-            predicate[index]+=val;
-        __syncthreads();
-    }
-    if(index == (numElems-1))
-        predicate[index] = 0; // reset last element to identity
+    int a = hist[index]+lastVal;
     __syncthreads();
-    for(int i=numElems/2; i>0; i >>= 1) // downstream
-    {
-        int otherVal = index - i;
-        int L;
-        int LplusR;
-        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
-        {
-            L = predicate[index];
-            LplusR = predicate[index]+predicate[otherVal];
-        }
-        __syncthreads();
-        if(otherVal >= 0 && (index%2)==1 && (((otherVal+1)/i)%2) == 1)
-        {
-            predicate[index] = LplusR;
-            predicate[otherVal] = L;
-        }
-        __syncthreads();
-    }*/
+    hist[index] = a - oldVals[index];
 }
 
-__global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned int * outputVals, unsigned int * outputPos, unsigned int * predicate, unsigned int * scannedPredicate, unsigned int * histVals, int movingOnes, int numElems)
+__global__ void move(unsigned int * inputVals, unsigned int * inputPos, unsigned int * outputVals, unsigned int * outputPos, unsigned int * predicate0, unsigned int * scannedPredicate0, unsigned int * predicate1, unsigned int * scannedPredicate1, unsigned int * histVals, int numElems)
 {
     int index = threadIdx.x + blockDim.x*blockIdx.x;
     if(index >= numElems)
         return;
     int HV = histVals[0];
     __syncthreads();
-    if(HV != numElems) {
-        if(predicate[index]==1)
-        {
-            int outIdx;
-            //int outIdx = ((movingOnes==1) ? (scannedPredicate[index] + histVals[0]) : scannedPredicate[index]);
-            if(movingOnes == 0)
-                outIdx = scannedPredicate[index];
-            else
-                outIdx = scannedPredicate[index] + HV;
-            int inVal = inputVals[index];
-            int inPos = inputPos[index];
-            outputVals[outIdx] = inVal;
-            outputPos[outIdx] = inPos;
-        }
+    if(predicate0[index] == 1) {
+        outputVals[scannedPredicate0[index]] = inputVals[index];
+        __syncthreads();
+        outputPos[scannedPredicate0[index]] = inputPos[index];
+        __syncthreads();
+    }
+    else if(predicate1[index] == 1) {
+        outputVals[scannedPredicate1[index]+HV] = inputVals[index];
+        __syncthreads();
+        outputPos[scannedPredicate1[index]+HV] = inputPos[index];
+        __syncthreads();
     }
     __syncthreads();
 }
-
+/*void testScan()
+{
+    int threads=1024;
+    int blocks = 4000/threads + 1;
+    int a[4000];
+    unsigned int *b;
+    unsigned int *c;
+    cudaMalloc(&b, sizeof(int)*4000);
+    cudaMalloc(&c, sizeof(int)*4000);
+    for(int i=0;i<4000;i++)
+        a[i]=1;
+    cudaMemcpy(b,a,sizeof(int)*4000,cudaMemcpyHostToDevice);
+    cudaMemcpy(c,a,sizeof(int)*4000,cudaMemcpyHostToDevice);
+    for(int i=0;i<blocks;i++)
+        exclusiveScan<<<1,threads>>>(b,c,1024,i,4000);
+    cudaMemcpy(a,b,sizeof(int)*4000,cudaMemcpyDeviceToHost);
+    for(int i=0;i<4000;i++)
+        cout << a[i] << endl;
+}*/
 void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVals, unsigned int * outPos)//, int numElems)
 {
-    int numElems = 2000;
+    int numElems = 3000;
     /*unsigned int h_a[numElems];
     unsigned int h_b[numElems];
     int a = numElems*200;
@@ -168,11 +150,15 @@ void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVal
     checkCudaErrors(cudaMemcpy(d_inputVals, inVals, aSize, cudaMemcpyDeviceToDevice));
     checkCudaErrors(cudaMemcpy(d_inputPos, inPos, aSize, cudaMemcpyDeviceToDevice));
     unsigned int * histVals;
-    unsigned int * predicate;
-    unsigned int * scannedPredicate;
+    unsigned int * predicate0;
+    unsigned int * scannedPredicate0;
+    unsigned int * predicate1;
+    unsigned int * scannedPredicate1;
     cudaMalloc(&histVals, sizeof(unsigned int)*2);
-    cudaMalloc(&predicate, aSize);
-    cudaMalloc(&scannedPredicate, aSize);
+    cudaMalloc(&predicate0, aSize);
+    cudaMalloc(&scannedPredicate0, aSize);
+    cudaMalloc(&predicate1, aSize);
+    cudaMalloc(&scannedPredicate1, aSize);
     int threads = 1024;
     int blocks = numElems/threads + 1;
     for(int i=0;i<32;i++)
@@ -183,24 +169,23 @@ void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVal
         hist<<<blocks,threads>>>(d_inputVals, histVals, bitLoc, numElems);
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
         // Using compaction to compute a predicate array for 0's
-        pred<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, 0, numElems);
+        pred<<<blocks,threads>>>(d_inputVals, predicate0, bitLoc, 0, numElems);
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaMemcpy(scannedPredicate, predicate, aSize, cudaMemcpyDeviceToDevice));
-        // Exclusive scan on predicate array to get index values of 0's
-        exclusiveScan<<<blocks,threads>>>(scannedPredicate, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        // Move input data into output data based on index specified in predicate array
-        move<<<blocks,threads>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, predicate, scannedPredicate, histVals, 0, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaMemcpy(scannedPredicate0, predicate0, aSize, cudaMemcpyDeviceToDevice));
         // Use compaction to compute predicate array for 1's
-        pred<<<blocks,threads>>>(d_inputVals, predicate, bitLoc, bitLoc, numElems);
+        pred<<<blocks,threads>>>(d_inputVals, predicate1, bitLoc, bitLoc, numElems);
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaMemcpy(scannedPredicate, predicate,aSize, cudaMemcpyDeviceToDevice));
-        // Exclusive scan on predicate array to get index values of 1's
-        exclusiveScan<<<blocks,threads>>>(scannedPredicate, numElems);
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        // Move input data into output data based on index specified in predicate array plus offset from 0's
-        move<<<blocks,threads>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, predicate, scannedPredicate, histVals, 1, numElems);
+        checkCudaErrors(cudaMemcpy(scannedPredicate1, predicate1,aSize, cudaMemcpyDeviceToDevice));
+        for(int j=0;j<blocks;j++) {
+            // Exclusive scan on predicate array to get index values of 0's
+            exclusiveScan<<<1,threads>>>(scannedPredicate0, predicate0, threads, j, numElems);
+            cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+            // Exclusive scan on predicate array to get index values of 1's
+            exclusiveScan<<<1,threads>>>(scannedPredicate1, predicate1, threads, j, numElems);
+            cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        }
+        // Move input data into output data based on index specified in predicate array
+        move<<<blocks,threads>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, predicate0, scannedPredicate0, predicate1, scannedPredicate1, histVals, numElems);
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
         // Copy output values into input values to update the sorted list
         checkCudaErrors(cudaMemcpy(d_inputVals, d_outputVals, aSize, cudaMemcpyDeviceToDevice));
@@ -218,8 +203,10 @@ void testMove(unsigned int * inVals, unsigned int * inPos, unsigned int * outVal
     cudaFree(d_outputVals);
     cudaFree(d_outputPos);
     cudaFree(histVals);
-    cudaFree(scannedPredicate);
-    cudaFree(predicate);
+    cudaFree(scannedPredicate0);
+    cudaFree(predicate0);
+    cudaFree(scannedPredicate1);
+    cudaFree(predicate1);
 }
 
 void your_sort(unsigned int* const d_inputVals,
@@ -228,5 +215,6 @@ void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_outputPos,
                const size_t numElems)
 {
+    //testScan();
     testMove(d_inputVals, d_inputPos, d_outputVals, d_outputPos);//, numElems);
 }
