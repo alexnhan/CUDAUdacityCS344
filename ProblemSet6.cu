@@ -68,6 +68,16 @@
 #include <thrust/host_vector.h>
 #include "reference_calc.cpp"
 
+__global__ void computeMaskKernel(uchar4 * d_sourceImg, int * d_mask, size_t numPixels)
+{
+    int pixel = threadIdx.x + blockDim.x*blockIdx.x;
+    if(pixel >= numPixels)
+        return;
+    uchar4 imagePixel = d_sourceImg[pixel];
+    if(imagePixel.x != 255 && imagePixel.y != 255 && imagePixel.z != 255)
+        d_mask[pixel] = 1;
+}
+
 void your_blend(const uchar4* const h_sourceImg,  //IN
                 const size_t numRowsSource, const size_t numColsSource,
                 const uchar4* const h_destImg, //IN
@@ -79,11 +89,19 @@ void your_blend(const uchar4* const h_sourceImg,  //IN
     /* 1) Compute a mask of the pixels from the source image to be copied
         The pixels that shouldn't be copied are completely white, they
         have R=255, G=255, B=255.  Any other pixels SHOULD be copied. */
-    uchar4* d_sourceImg;
+    uchar4* d_sourceImg; // array to hold h_sourceImg
+    int * d_mask; // predicate array for holding which pixel should be copied
     size_t numPixels = numRowsSource*numColsSource;
-    checkCudaErrors(cudaMalloc(d_sourceImg, sizeof(uchar4)*numPixels));
-    checkCudaErrors(cudaMemcpy(d_sourceImg, h_sourceImg, cudaMemcpyHostToDevice));
-
+    int maskKernelThreads = 1024;
+    int maskKernelBlocks = numPixels/maskKernelThreads + 1;
+    unsigned int sizePicture_uchar4 = sizeof(uchar4)*numPixels;
+    unsigned int sizePicture_int = sizeof(int)*numPixels;
+    checkCudaErrors(cudaMalloc(&d_sourceImg, sizePicture_uchar4));
+    checkCudaErrors(cudaMalloc(&d_mask, sizePicture_int));
+    checkCudaErrors(cudaMemcpy(d_sourceImg, h_sourceImg, sizePicture_uchar4, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemset(d_mask, 0, sizePicture_int));
+    computeMaskKernel<<<maskKernelBlocks, maskKernelThreads>>>(d_sourceImg, d_mask, numPixels);
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
     /* 2) Compute the interior and border regions of the mask.  An interior
         pixel has all 4 neighbors also inside the mask.  A border pixel is
         in the mask itself, but has at least one neighbor that isn't. */
@@ -115,8 +133,10 @@ void your_blend(const uchar4* const h_sourceImg,  //IN
 
       to catch any errors that happened while executing the kernel.
   */
-
-
+    
+    // Freeing allocated GPU memory
+    checkCudaErrors(cudaFree(d_sourceImg));
+    checkCudaErrors(cudaFree(d_mask));
 
   /* The reference calculation is provided below, feel free to use it
      for debugging purposes. 
