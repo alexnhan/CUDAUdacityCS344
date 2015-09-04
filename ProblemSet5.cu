@@ -31,14 +31,21 @@
 __global__
 void yourHisto(const unsigned int* const vals, //INPUT
                unsigned int* const histo,      //OUPUT
-               int numVals)
+               const unsigned int numVals, const unsigned int numBins)
 {
   //TODO fill in this kernel to calculate the histogram
   //as quickly as possible
     int idx = threadIdx.x + blockDim.x*blockIdx.x;
+    int tid = threadIdx.x;
     if(idx >= numVals)
         return;
-    atomicAdd(&histo[vals[idx]],1);
+    extern __shared__ unsigned int tempHisto[]; // shared memory for each block of threads
+    tempHisto[tid] = 0; // initialize bins to 0
+    __syncthreads();
+    atomicAdd(&tempHisto[vals[idx]],1); // populate shared histogram for each block of threads
+    __syncthreads(); // wait until all threads have contributed to the temporary histogram
+    unsigned int histVal = tempHisto[tid]; // take the value at the thread index for each shared histogram
+    atomicAdd(&histo[tid],histVal); // update global histogram with the value
     
   //Although we provide only one kernel skeleton,
   //feel free to use more if it will help you
@@ -51,10 +58,9 @@ void computeHistogram(const unsigned int* const d_vals, //INPUT
                       const unsigned int numElems)
 {
   //TODO Launch the yourHisto kernel
-    int threads = 1024;
+    int threads = numBins;
     int blocks  = numElems/threads + 1;
-    yourHisto<<<blocks, threads>>>(d_vals, d_histo, numElems);
-    
+    yourHisto<<<blocks, threads, sizeof(unsigned int)*numBins>>>(d_vals, d_histo, numElems, numBins);
   //if you want to use/launch more than one kernel,
   //feel free
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
