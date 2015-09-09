@@ -8,8 +8,6 @@
 // Your job is to implemment a bitonic sort. A description of the bitonic sort
 // can be see at:
 // http://en.wikipedia.org/wiki/Bitonic_sort
-#define UP 1
-#define DOWN 0
 
 __device__ void swap(float & a, float & b)
 {
@@ -34,21 +32,16 @@ __global__ void batcherBitonicMergesort64(float * d_out, const float * d_in)
             int partner = tid - otherVal;
             int div = 1 << (stage+1); // determines valid partners
             int div2 = 1 << (substage+1); // determines up/down
-            int direction=2; // initialize direction to unknown
             if(partner < 0 || ((partner/div2) != (tid/div2)))
                 ;
             else
             {
                 if( ((partner/div)%2 == 0) && ((tid/div)%2 == 0) )
-                    direction = DOWN;
-                else if( ((partner/div)%2 == 1) && ((tid/div)%2 == 1) )
-                    direction = UP;
-                if(direction == DOWN)
                 {
                     if(sdata[tid] < sdata[partner])
                         swap(sdata[tid], sdata[partner]);
                 }
-                else if(direction == UP)
+                else if( ((partner/div)%2 == 1) && ((tid/div)%2 == 1) )
                 {
                     if(sdata[tid] > sdata[partner])
                         swap(sdata[tid], sdata[partner]);
